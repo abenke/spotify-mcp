@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# uv / pip
+uv.lock
+
+# Environment & secrets
+.env
+.env.local
+
+# Spotify MCP token cache (never commit OAuth tokens)
+.spotify-mcp/
+token.json
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
