@@ -11,8 +11,9 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from .audio_features import AudioFeaturesClient, AudioFeaturesError
 from .auth import SpotifyAuth, SpotifyAuthError
-from .client import SpotifyAPIError, SpotifyClient
+from .client import SpotifyAPIError, SpotifyClient, _extract_id
 
 mcp = FastMCP(
     "spotify",
@@ -27,6 +28,7 @@ mcp = FastMCP(
 # Lazily-constructed singletons so import never fails when env vars are missing.
 _auth: Optional[SpotifyAuth] = None
 _client: Optional[SpotifyClient] = None
+_audio_client: Optional[AudioFeaturesClient] = None
 
 
 def _get_auth() -> SpotifyAuth:
@@ -43,6 +45,13 @@ def _get_client() -> SpotifyClient:
     return _client
 
 
+def _get_audio_client() -> AudioFeaturesClient:
+    global _audio_client
+    if _audio_client is None:
+        _audio_client = AudioFeaturesClient()
+    return _audio_client
+
+
 def _guard(fn):
     """Convert internal exceptions into clean, model-readable error strings.
 
@@ -54,7 +63,7 @@ def _guard(fn):
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except (SpotifyAuthError, SpotifyAPIError) as exc:
+        except (SpotifyAuthError, SpotifyAPIError, AudioFeaturesError) as exc:
             return {"error": str(exc)}
 
     return wrapper
@@ -138,6 +147,30 @@ def get_track(track_id: str) -> dict:
             open.spotify.com track URL.
     """
     return _get_client().get_track(track_id)
+
+
+@mcp.tool()
+@_guard
+def get_audio_features(track_ids: list[str]) -> dict:
+    """Get audio-analysis attributes for songs: tempo/BPM, key, energy,
+    danceability, valence, acousticness, loudness, and more.
+
+    Note: Spotify deprecated its own audio-features endpoint for apps created
+    after 2024-11-27 (it returns 403). This tool instead uses ReccoBeats, a free
+    third-party service that mirrors the same metrics and accepts Spotify track
+    IDs. The track IDs are sent to ReccoBeats and the returned values are its
+    estimates, not Spotify's original numbers.
+
+    Args:
+        track_ids: One or more Spotify track IDs, `spotify:track:...` URIs, or
+            open.spotify.com track URLs.
+    """
+    if isinstance(track_ids, str):
+        track_ids = [track_ids]
+    ids = [_extract_id(t, "track") for t in track_ids if t and t.strip()]
+    if not ids:
+        return {"error": "No track IDs provided."}
+    return {"audio_features": _get_audio_client().get_audio_features(ids)}
 
 
 # --------------------------------------------------------------------------

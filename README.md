@@ -15,6 +15,7 @@ details, list your playlists, and create new ones on your behalf.
 | `get_current_user` | Your Spotify profile (id, display name, country, …). |
 | `search` | Search the catalog for tracks, albums, artists, or playlists. |
 | `get_track` | Detailed info for a single song. |
+| `get_audio_features` | Tempo/BPM, key, energy, danceability, etc. for songs (see note below). |
 | `list_my_playlists` | List the playlists you own or follow (paginated). |
 | `get_playlist` | A playlist's details and its tracks. |
 | `create_playlist` | Create a new playlist (optionally seeded with tracks). |
@@ -28,6 +29,23 @@ recommended flow for locally-run apps, because it needs only a Client ID and no
 client secret. On first use the server opens your browser, you approve access,
 and the resulting tokens are cached at `~/.spotify-mcp/token.json` and refreshed
 automatically. You typically authenticate just once per machine.
+
+## Audio features (tempo/BPM, key, energy, danceability)
+
+Spotify [deprecated](https://developer.spotify.com/blog/2024-11-27-changes-to-the-web-api)
+its own `audio-features` and `audio-analysis` endpoints on 2024-11-27. Apps
+created after that date get `403 Forbidden`, and there is no official
+replacement.
+
+So `get_audio_features` instead uses [ReccoBeats](https://reccobeats.com) — a
+free third-party service that mirrors the same metrics and accepts Spotify track
+IDs. Two things to be aware of:
+
+- Track IDs you look up are sent to ReccoBeats (not Spotify).
+- The returned values are ReccoBeats' estimates, not Spotify's original numbers.
+
+No API key is required. You can point the tool at a different base URL with the
+`RECCOBEATS_BASE_URL` environment variable.
 
 ## Prerequisites
 
@@ -70,6 +88,7 @@ these via their config `env` block (shown below).
 | `SPOTIFY_CLIENT_SECRET` | — | — | Optional. If set, uses the classic Authorization Code flow instead of PKCE. |
 | `SPOTIFY_REDIRECT_URI` | — | `http://127.0.0.1:8888/callback` | Must exactly match a redirect URI on your app. |
 | `SPOTIFY_MCP_CACHE` | — | `~/.spotify-mcp/token.json` | Where OAuth tokens are cached. |
+| `RECCOBEATS_BASE_URL` | — | `https://api.reccobeats.com` | Base URL for the `get_audio_features` provider. |
 
 ### Authenticate first (recommended)
 
@@ -163,10 +182,11 @@ Project layout:
 
 ```
 src/spotify_mcp/
-  auth.py     # OAuth (PKCE) flow, token cache & refresh
-  client.py   # Spotify Web API wrapper + response trimming
-  server.py   # FastMCP server and tool definitions
-  __main__.py # CLI: run server / auth / status
+  auth.py           # OAuth (PKCE) flow, token cache & refresh
+  client.py         # Spotify Web API wrapper + response trimming
+  audio_features.py # Tempo/key/energy via ReccoBeats (Spotify's is deprecated)
+  server.py         # FastMCP server and tool definitions
+  __main__.py       # CLI: run server / auth / status
 ```
 
 ## License
