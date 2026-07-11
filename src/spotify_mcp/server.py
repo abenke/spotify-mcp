@@ -14,6 +14,7 @@ from mcp.server.fastmcp import FastMCP
 from .audio_features import AudioFeaturesClient, AudioFeaturesError
 from .auth import SpotifyAuth, SpotifyAuthError
 from .client import SpotifyAPIError, SpotifyClient, _extract_id
+from .structure import LyricsClient, StructureError, analyze_structure, parse_lrc
 
 mcp = FastMCP(
     "spotify",
@@ -29,6 +30,7 @@ mcp = FastMCP(
 _auth: Optional[SpotifyAuth] = None
 _client: Optional[SpotifyClient] = None
 _audio_client: Optional[AudioFeaturesClient] = None
+_lyrics_client: Optional[LyricsClient] = None
 
 
 def _get_auth() -> SpotifyAuth:
@@ -52,6 +54,13 @@ def _get_audio_client() -> AudioFeaturesClient:
     return _audio_client
 
 
+def _get_lyrics_client() -> LyricsClient:
+    global _lyrics_client
+    if _lyrics_client is None:
+        _lyrics_client = LyricsClient()
+    return _lyrics_client
+
+
 def _guard(fn):
     """Convert internal exceptions into clean, model-readable error strings.
 
@@ -63,7 +72,12 @@ def _guard(fn):
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except (SpotifyAuthError, SpotifyAPIError, AudioFeaturesError) as exc:
+        except (
+            SpotifyAuthError,
+            SpotifyAPIError,
+            AudioFeaturesError,
+            StructureError,
+        ) as exc:
             return {"error": str(exc)}
 
     return wrapper
@@ -171,6 +185,106 @@ def get_audio_features(track_ids: list[str]) -> dict:
     if not ids:
         return {"error": "No track IDs provided."}
     return {"audio_features": _get_audio_client().get_audio_features(ids)}
+
+
+@mcp.tool()
+@_guard
+def find_choruses(
+    track_id: Optional[str] = None,
+    artist: Optional[str] = None,
+    title: Optional[str] = None,
+) -> dict:
+    """Find a song's choruses and other repeated sections, with the length in
+    seconds of every occurrence — e.g. a chorus sung three times for 14 seconds
+    each reports durations [14, 14, 14]. Also reports when each occurrence
+    starts/ends, the gaps between them, and a full song timeline. Useful for
+    planning workouts, choreography, or class progressions around a song.
+
+    Identify the song either by Spotify track (requires authentication) or by
+    artist + title directly (no authentication needed).
+
+    How it works: choruses are detected as blocks of lyric lines that repeat at
+    several timestamps in the song, using time-synced lyrics from LRCLIB — a
+    free community lyrics database (the artist/title you look up is sent to
+    lrclib.net). Instrumental tracks, and tracks LRCLIB doesn't know, can't be
+    analyzed this way.
+
+    Args:
+        track_id: A Spotify track ID, `spotify:track:...` URI, or
+            open.spotify.com track URL.
+        artist: Artist name (used with `title` when no track_id is given).
+        title: Song title (used with `artist` when no track_id is given).
+    """
+    album = None
+    duration_s = None
+    track_info: dict = {}
+    if track_id:
+        track = _get_client().get_track(track_id)
+        title = track.get("name")
+        artists = track.get("artists") or []
+        artist = artists[0] if artists else None
+        album = track.get("album")
+        if track.get("duration_ms"):
+            duration_s = track["duration_ms"] / 1000
+        track_info = {
+            "id": track.get("id"),
+            "name": title,
+            "artists": artists,
+            "duration_seconds": round(duration_s) if duration_s else None,
+        }
+    if not artist or not title:
+        return {
+            "error": "Provide either a Spotify track_id, or both artist and title."
+        }
+
+    record = _get_lyrics_client().fetch_lyrics(
+        artist, title, album=album, duration_s=duration_s
+    )
+    if not record:
+        return {
+            "error": f"No lyrics found for '{title}' by {artist} on LRCLIB, "
+            "so the song's structure can't be analyzed."
+        }
+    if record.get("instrumental"):
+        return {
+            "error": f"'{title}' by {artist} is marked instrumental on LRCLIB "
+            "(no lyrics), so choruses can't be detected from lyrics."
+        }
+
+    lyrics_info = {
+        "matched_title": record.get("trackName"),
+        "matched_artist": record.get("artistName"),
+        "source": "lrclib.net",
+    }
+    if duration_s is None and record.get("duration"):
+        duration_s = record["duration"]
+
+    synced = record.get("syncedLyrics")
+    if synced:
+        lines = parse_lrc(synced)
+        result = analyze_structure(lines, track_duration_s=duration_s)
+    else:
+        plain = record.get("plainLyrics") or ""
+        lines = [(None, line.strip()) for line in plain.splitlines()]
+        if not any(text for _, text in lines):
+            return {
+                "error": f"LRCLIB has no usable lyrics for '{title}' by {artist}."
+            }
+        result = analyze_structure(lines)
+        result["note"] = (
+            "Only un-synced lyrics were available, so sections are counted "
+            "but their durations in seconds can't be measured."
+        )
+
+    if not result["sections"]:
+        result["note"] = (
+            "No repeated lyric sections were detected — the song may have "
+            "through-composed lyrics or the synced lyrics may be incomplete."
+        )
+    if track_info:
+        result["track"] = track_info
+    result["lyrics"] = lyrics_info
+    return result
 
 
 # --------------------------------------------------------------------------

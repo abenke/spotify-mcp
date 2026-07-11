@@ -16,6 +16,7 @@ details, list your playlists, and create new ones on your behalf.
 | `search` | Search the catalog for tracks, albums, artists, or playlists. |
 | `get_track` | Detailed info for a single song. |
 | `get_audio_features` | Tempo/BPM, key, energy, danceability, etc. for songs (see note below). |
+| `find_choruses` | Detect a song's choruses & repeated sections, with the length in seconds of each occurrence (see note below). |
 | `list_my_playlists` | List the playlists you own or follow (paginated). |
 | `get_playlist` | A playlist's details and its tracks. |
 | `create_playlist` | Create a new playlist (optionally seeded with tracks). |
@@ -46,6 +47,37 @@ IDs. Two things to be aware of:
 
 No API key is required. You can point the tool at a different base URL with the
 `RECCOBEATS_BASE_URL` environment variable.
+
+## Chorus detection (`find_choruses`)
+
+Built for planning workouts, choreography, or class progressions around a
+song's structure: `find_choruses` reports every time the chorus (and any other
+repeated section, like a post-chorus hook) occurs, how long each occurrence
+runs in seconds — a chorus sung three times for 14 seconds each comes back as
+`[14, 14, 14]` — the gaps between occurrences, and a start-to-finish timeline
+of the song.
+
+Since Spotify serves no raw audio and deprecated its `audio-analysis` endpoint
+(the one that exposed section timings), the analysis works from **time-synced
+lyrics** instead: a chorus is a block of lyric lines that repeats
+(near-)verbatim at several timestamps, and the line timestamps yield each
+occurrence's start, end, and duration. Lyrics come from
+[LRCLIB](https://lrclib.net), a free community lyrics database that needs no
+API key.
+
+Things to be aware of:
+
+- You can identify the song by Spotify track ID **or** by artist + title —
+  the latter needs no Spotify authentication at all.
+- The artist/title you look up is sent to LRCLIB (not Spotify). Point the tool
+  at a different base URL with the `LRCLIB_BASE_URL` environment variable.
+- Instrumental tracks, and tracks LRCLIB doesn't have synced lyrics for, can't
+  be analyzed. If only un-synced lyrics exist, sections are counted but not
+  timed.
+- Durations run from the first line of a section to the first line of the next
+  one, so a chorus's trailing instrumental bars count toward the chorus.
+- If a hook *always* follows the chorus, the lyrics give no evidence they are
+  separate sections, and they'll be reported as one combined block.
 
 ## Prerequisites
 
@@ -89,6 +121,7 @@ these via their config `env` block (shown below).
 | `SPOTIFY_REDIRECT_URI` | — | `http://127.0.0.1:8888/callback` | Must exactly match a redirect URI on your app. |
 | `SPOTIFY_MCP_CACHE` | — | `~/.spotify-mcp/token.json` | Where OAuth tokens are cached. |
 | `RECCOBEATS_BASE_URL` | — | `https://api.reccobeats.com` | Base URL for the `get_audio_features` provider. |
+| `LRCLIB_BASE_URL` | — | `https://lrclib.net` | Base URL for the `find_choruses` lyrics provider. |
 
 ### Authenticate first (recommended)
 
@@ -153,6 +186,8 @@ Then just ask, e.g.:
 - "Search Spotify for upbeat indie tracks from 2019."
 - "Show me the songs in my *Focus* playlist."
 - "Create a private playlist called *Roadtrip* and add these five songs."
+- "How many choruses does *Don't Start Now* have, and how long is each one?"
+- "For every song in my *Spin Tuesday* playlist, list the chorus timings."
 
 ## Scopes requested
 
@@ -176,6 +211,9 @@ spotify-mcp
 
 # Or as a module
 python -m spotify_mcp
+
+# Run the tests
+uv run pytest
 ```
 
 Project layout:
@@ -185,8 +223,10 @@ src/spotify_mcp/
   auth.py           # OAuth (PKCE) flow, token cache & refresh
   client.py         # Spotify Web API wrapper + response trimming
   audio_features.py # Tempo/key/energy via ReccoBeats (Spotify's is deprecated)
+  structure.py      # Chorus/section detection from LRCLIB synced lyrics
   server.py         # FastMCP server and tool definitions
   __main__.py       # CLI: run server / auth / status
+tests/              # Unit + stub-server tests (no network needed)
 ```
 
 ## License
